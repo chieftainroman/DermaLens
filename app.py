@@ -63,10 +63,6 @@ print("Model loaded (ResNet50).")
 
 
 class GradCAM:
-    """
-    Простая реализация Grad-CAM для последнего сверточного блока ResNet50.
-    """
-
     def __init__(self, model, target_layer):
         self.model = model
         self.target_layer = target_layer
@@ -87,10 +83,6 @@ class GradCAM:
         self.target_layer.register_backward_hook(backward_hook)
 
     def generate(self, input_tensor, class_idx=None):
-        """
-        input_tensor: (1, 3, H, W)
-        return: cam (H,W in [0,1]), class_idx, probs (np.array num_classes)
-        """
         self.model.zero_grad()
 
         output = self.model(input_tensor)  # (1, num_classes)
@@ -127,11 +119,6 @@ grad_cam = GradCAM(model, target_layer)
 
 
 def get_ai_advice(class_name, prob, probs, class_names):
-    """
-    Ask OpenAI for a textual explanation of the results.
-    IMPORTANT: This is NOT a diagnosis. It is general information only.
-    """
-
     top_indices = np.argsort(probs)[::-1][:3]
     top_info = []
     for idx in top_indices:
