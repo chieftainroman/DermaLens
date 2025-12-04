@@ -16,15 +16,11 @@ from torchvision import models, transforms
 from PIL import Image
 import numpy as np
 
-# =========================
-# Инициализация Flask
-# =========================
-app = Flask(__name__)
-app.secret_key = "super-secret-key-change-me"  # нужен для flash-сообщений
 
-# =========================
-# OpenAI + .env
-# =========================
+app = Flask(__name__)
+app.secret_key = "super-secret-key-change-me"  
+
+
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -32,27 +28,20 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# =========================
-# Настройки устройства
-# =========================
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-# Лок для потокобезопасного доступа к модели
 model_lock = threading.Lock()
 
-# =========================
-# Загружаем классы болезней
-# =========================
+
 with open("models/class_names.json", "r") as f:
     class_names = json.load(f)
 
 num_classes = len(class_names)
 print("Num classes:", num_classes)
 
-# =========================
-# Трансформации (как при обучении)
-# =========================
+
 img_size = 224
 preprocess = transforms.Compose([
     transforms.Resize((img_size, img_size)),
@@ -61,9 +50,6 @@ preprocess = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# =========================
-# Модель ResNet50 + веса
-# =========================
 model = models.resnet50(weights=None)
 num_ftrs = model.fc.in_features
 model.fc = nn.Linear(num_ftrs, num_classes)
@@ -76,9 +62,6 @@ model.eval()
 print("Model loaded (ResNet50).")
 
 
-# =========================
-# Grad-CAM
-# =========================
 class GradCAM:
     """
     Простая реализация Grad-CAM для последнего сверточного блока ResNet50.
@@ -121,7 +104,6 @@ class GradCAM:
         gradients = self.gradients[0]      # (C, H, W)
         activations = self.activations[0]  # (C, H, W)
 
-        # Усредняем градиенты по spatial-осям -> веса
         weights = gradients.mean(dim=(1, 2))  # (C,)
 
         cam = torch.zeros(activations.shape[1:], dtype=torch.float32).to(device)
@@ -140,21 +122,16 @@ class GradCAM:
         return cam, class_idx, probs
 
 
-# Глобальный Grad-CAM для последнего блока
 target_layer = model.layer4
 grad_cam = GradCAM(model, target_layer)
 
 
-# =========================
-# OpenAI advice (ENGLISH)
-# =========================
 def get_ai_advice(class_name, prob, probs, class_names):
     """
     Ask OpenAI for a textual explanation of the results.
     IMPORTANT: This is NOT a diagnosis. It is general information only.
     """
 
-    # Build top-3 classes for context
     top_indices = np.argsort(probs)[::-1][:3]
     top_info = []
     for idx in top_indices:
@@ -192,7 +169,7 @@ TASK:
 """
 
     response = client.responses.create(
-        model="gpt-5.1",   # or "gpt-5.1-mini" if хочешь дешевле/быстрее
+        model="gpt-5.1",   
         input=prompt,
     )
 
@@ -200,51 +177,35 @@ TASK:
     return advice_text
 
 
-# =========================
-# Обработка загруженного изображения
-# =========================
+
 def analyze_uploaded_image(file_storage):
-    """
-    Принимает Flask FileStorage, возвращает:
-    - class_name
-    - prob
-    - advice (string)
-    - overlay_png_base64 (string "data:image/png;base64,...")
-    """
-    # Читаем файл в память
     file_bytes = file_storage.read()
     if not file_bytes:
         raise ValueError("Empty file")
 
-    # Декодируем в OpenCV BGR
     np_arr = np.frombuffer(file_bytes, np.uint8)
     orig_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if orig_bgr is None:
         raise ValueError("Unable to decode image")
 
-    # Масштабируем до 224x224
     resized_bgr = cv2.resize(orig_bgr, (img_size, img_size))
     resized_rgb = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB)
 
     pil_img = Image.fromarray(resized_rgb)
     input_tensor = preprocess(pil_img).unsqueeze(0).to(device)
 
-    # Защита модели локом (для нескольких одновременных запросов)
     with model_lock:
         cam, class_idx, probs = grad_cam.generate(input_tensor)
 
     class_name = class_names[class_idx]
     prob = probs[class_idx]
 
-    # Heatmap
     cam_uint8 = np.uint8(cam * 255.0)
     cam_uint8 = cv2.resize(cam_uint8, (img_size, img_size))
     heatmap = cv2.applyColorMap(cam_uint8, cv2.COLORMAP_JET)
 
-    # Накладываем heatmap на оригинал
     overlay = cv2.addWeighted(resized_bgr, 0.5, heatmap, 0.5, 0)
 
-    # Подпись на картинке
     text = f"{class_name}: {prob*100:.1f}%"
     cv2.putText(
         overlay,
@@ -257,7 +218,6 @@ def analyze_uploaded_image(file_storage):
         cv2.LINE_AA
     )
 
-    # Конвертируем overlay в PNG base64
     _, buffer = cv2.imencode(".png", overlay)
     png_bytes = buffer.tobytes()
     b64 = base64.b64encode(png_bytes).decode("utf-8")
